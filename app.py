@@ -2,52 +2,72 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# Configuración de la página
-st.set_page_config(page_title="Dashboard RRHH - CENOA", layout="wide")
+st.set_page_config(page_title="Dashboard RRHH CENOA", layout="wide")
 
-st.title("📊 Dashboard de Gestión de Talento - CENOA")
-st.markdown("Análisis de Dotación y Rotación 2025 - 2026")
-
-# URL de tu Sheet (formato export para pandas)
-sheet_id = "1XnsUZUZGH9itPCDf6jPpOIqfMIbX5s8nEe9JkF6ccqU"
-# Nota: Se asume que los datos están limpios en el CSV. 
-# Para este ejemplo, usaremos una estructura simplificada basada en tu archivo.
+# URL directa de exportación de tus pestañas
+SHEET_ID = "1XnsUZUZGH9itPCDf6jPpOIqfMIbX5s8nEe9JkF6ccqU"
+URL_DOTACION = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=DOTACIÓN"
+URL_ROTACION = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=ROTACIÓN"
 
 @st.cache_data
-def load_data():
-    # En una app real, aquí conectarías con st.connection o cargarías el CSV
-    # Por ahora, simulamos la carga de la estructura que vi en tu archivo
-    url_dotacion = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet=DOTACIÓN"
-    url_rotacion = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet=ROTACIÓN"
+def get_data(url, valor_name):
+    # Leer datos
+    df = pd.read_csv(url)
+    # Limpiar columnas vacías
+    df = df.dropna(axis=1, how='all')
+    # Identificar columnas de meses (las que no son Empresa ni Provincia)
+    id_vars = ['EMPRESA', 'PROVINCIA']
+    value_vars = [col for col in df.columns if col not in id_vars]
     
-    # Aquí deberías cargar y limpiar tus datos según las pestañas
-    # df_dot = pd.read_csv(url_dotacion)
-    # df_rot = pd.read_csv(url_rotacion)
-    return url_dotacion, url_rotacion
+    # Transformar de horizontal a vertical
+    df_melted = df.melt(id_vars=id_vars, value_vars=value_vars, 
+                        var_name='Mes', value_name=valor_name)
+    return df_melted
 
-# --- SIDEBAR: FILTROS ---
-st.sidebar.header("Filtros de Análisis")
-empresa = st.sidebar.multiselect("Seleccionar Empresa", ["Autolux", "Autosol", "Ciel", "La Luz", "CENOA"], default="CENOA")
-provincia = st.sidebar.selectbox("Seleccionar Provincia/Región", ["Cenoa", "Jujuy", "Salta"])
+# Cargar bases
+try:
+    df_dot = get_data(URL_DOTACION, "Dotación")
+    df_rot = get_data(URL_ROTACION, "Rotación %")
+    
+    # Unir ambas tablas
+    df_final = pd.merge(df_dot, df_rot, on=['EMPRESA', 'PROVINCIA', 'Mes'])
+except Exception as e:
+    st.error(f"Error al conectar con Google Sheets: {e}")
+    st.stop()
 
-# --- CUERPO PRINCIPAL ---
-col1, col2 = st.columns(2)
+# --- INTERFAZ ---
+st.title("📊 Control de Gestión RRHH - CENOA")
 
-with col1:
-    st.subheader(f"📈 Evolución de Dotación en {provincia}")
-    # Aquí iría el gráfico de líneas (px.line) con los meses en el eje X
-    st.info("Gráfico de tendencia de dotación mensual")
+# Filtros
+col_f1, col_f2 = st.columns(2)
+with col_f1:
+    empresas = df_final['EMPRESA'].unique()
+    sel_empresa = st.multiselect("Filtrar por Empresa", empresas, default=empresas)
+with col_f2:
+    provincias = df_final['PROVINCIA'].unique()
+    sel_provincia = st.selectbox("Filtrar por Provincia", provincias)
 
-with col2:
-    st.subheader(f"🔄 Índice de Rotación Mensual (%)")
-    # Aquí iría el gráfico de barras (px.bar)
-    st.warning("Gráfico de barras con picos de rotación")
+# Filtrado de datos
+mask = (df_final['EMPRESA'].isin(sel_empresa)) & (df_final['PROVINCIA'] == sel_provincia)
+df_filtrado = df_final[mask]
 
+# --- VISUALIZACIONES ---
+c1, c2 = st.columns(2)
+
+with c1:
+    st.subheader(f"Evolución de Dotación - {sel_provincia}")
+    fig_dot = px.line(df_filtrado, x='Mes', y='Dotación', color='EMPRESA', 
+                      markers=True, text='Dotación')
+    fig_dot.update_traces(textposition="top center")
+    st.plotly_chart(fig_dot, use_container_width=True)
+
+with c2:
+    st.subheader(f"Índice de Rotación - {sel_provincia}")
+    fig_rot = px.bar(df_filtrado, x='Mes', y='Rotación %', color='EMPRESA', 
+                     barmode='group', text_auto='.2f')
+    st.plotly_chart(fig_rot, use_container_width=True)
+
+# --- TABLA DE DETALLE ---
 st.divider()
-
-# --- DETALLE TABULAR ---
-st.subheader("📋 Detalle de Datos Mensuales")
-st.write("Selecciona los filtros para ver el desglose detallado mes a mes.")
-# st.dataframe(df_filtrado)
-
-st.success("💡 Tip de Experto: El pico de rotación en Salta (Dic-25) sugiere revisar los procesos de salida o clima laboral en ese período.")
+st.subheader("Datos Detallados")
+st.dataframe(df_filtrado.style.highlight_max(axis=0, subset=['Rotación %'], color='#ffaaaa'), use_container_width=True)
